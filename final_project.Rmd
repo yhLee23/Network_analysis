@@ -1,0 +1,196 @@
+---
+title: "Final project"
+author: "R09541202 李亦薌"
+output: html_document
+editor_options: 
+  chunk_output_type: inline
+
+---
+ 
+<style>
+h1 {
+  text-align: center;
+}
+h4 {
+  text-align: right;
+}
+</style>
+```{r setup, include=FALSE}
+
+require(stringr)
+require(tidyr)
+require(igraph)
+require(ggplot2)
+require(dplyr)
+require(knitr)
+require(reshape2)
+require(data.table)
+require(influenceR)
+require(tergm)
+
+```
+
+```{r, echo=FALSE}
+#data site
+options(digits = 2)
+setwd("/Users/leeyihsiang/Desktop/NetWork/network_final")
+
+energy <- read.csv("energy_trade2018.csv",header=T)
+energy_all <- read.csv("energy2009_2018.csv",header=T)
+node <- read.csv("vertex.csv")
+
+coal <-  as.data.frame(subset(energy, energy[,5]=="P05"))
+oil <-  subset(energy, energy[,5]=="P06")
+
+coal_all <-  subset(energy_all, energy_all[,5]=="P05")
+oil_all <-  subset(energy_all, energy_all[,5]=="P06")
+
+```
+```{r  ,include=FALSE}
+g_oil <- graph.data.frame(oil , directed = TRUE,vertices = node)
+E(g_oil)$weight <- E(g_oil)$Value
+
+g_oil_un <- as.undirected(g_oil)
+
+degree_oil <- data.frame(country=V(g_oil)$name,outdegree=degree(g_oil, v = V(g_oil), mode = c("out"),normalized = FALSE),indegree=degree(g_oil, v=V(g_oil), mode = c('in'), normalized = FALSE),efficiency=ens(g_oil_un)/degree(g_oil_un, v=V(g_oil_un), mode = c('all'), normalized = FALSE)) 
+
+long_oil_de <- melt(setDT(degree_oil), id.vars = c("country"),measure.vars = 2:3,variable.name = "degree")
+
+#petroleum degree histogram
+p2<-ggplot(long_oil_de , aes(x=value, color=degree, fill=degree)) +geom_histogram(position="identity", alpha=0.6,bins=60, lwd=0.2)+scale_x_continuous(limits=c(-1,60))+scale_y_continuous(limits=c(0,25))+ scale_color_grey(labels = c("Out-degree", "In-degree"))+scale_fill_grey(labels = c("Out-degree", "In-degree"))+labs(title="Crude petroleum and natural gas trade",x="degree centrality", y = "Freqency")+theme_classic()+theme(plot.title = element_text(size=10,hjust = 0.5),legend.position = c(0.85, 0.6),axis.text=element_text(size=8),axis.title=element_text(size=8),legend.title=element_text(size=8),legend.text=element_text(size=8))
+
+#----plot oil efficiency & degree (year 2018)-----
+
+data_complete2 <- degree_oil[complete.cases(efficiency), ]
+p7<-ggplot(data_complete2, aes(x=outdegree, y=efficiency)) +geom_point(size=0.6) +stat_smooth(method = "lm", colour = "blue")+geom_text(label=data_complete2$country,cex=2,vjust = 0, nudge_y = 0.005)+labs(title="Petroleum & NGS",x="Out degree", y = "efficiency")+theme_classic()+theme(plot.title = element_text(size=10,hjust = 0.5),axis.text=element_text(size=9),axis.title=element_text(size=9),legend.title=element_text(size=8))
+
+
+p8<-ggplot(data_complete2, aes(x=indegree, y=efficiency)) +geom_point(size=0.6)+stat_smooth(method = "lm", colour = "blue") + geom_text(label=data_complete2$country,cex=2,vjust = 0, nudge_y = 0.005)+labs(title="Petroleum & NGS",x="in degree", y = "efficiency")+theme_classic()+theme(plot.title = element_text(size=10,hjust = 0.5),axis.text=element_text(size=9),axis.title=element_text(size=9),legend.title=element_text(size=8))
+```
+
+##### Degree centrality distribution (year 2018)
+```{r  ,message=FALSE, warning = FALSE, figures-side, out.width="50%" ,fig.height=4, fig.width=5, fig.show='hold' }
+
+g_coal <- graph.data.frame(coal,directed = T,vertices = node)
+E(g_coal)$weight <- E(g_coal)$Value
+# create degree data.frame
+
+g_coal_un <- as.undirected(g_coal)
+(degree_coal <- data.frame(country=V(g_coal)$name,Name=V(g_coal)$country_name,outdegree=degree(g_coal, v = V(g_coal), mode = c("out"),normalized = FALSE),indegree=degree(g_coal, v=V(g_coal), mode = c('in'), normalized = FALSE),between=igraph::betweenness(g_coal,v=V(g_coal), normalized = F),efficiency=ens(g_coal_un)/degree(g_coal_un, v=V(g_coal_un), mode = c('all'), normalized = FALSE)))
+
+long_coal_de <- melt(setDT(degree_coal), id.vars = c("country"),measure.vars = 3:4,variable.name = "degree")
+
+
+ggplot(long_coal_de , aes(x=value, color=degree, fill=degree)) +geom_histogram(position="identity", alpha=0.6,bins=60)+ scale_color_grey(labels = c("Out-degree", "In-degree"))+scale_fill_grey(labels = c("Out-degree", "In-degree"))+scale_x_continuous(limits=c(-1,60))+scale_y_continuous(limits=c(0,25))+labs(title="Coal trade",x="degree centrality", y = "Freqency")+theme_classic()+theme(plot.title = element_text(size=10,hjust = 0.5),legend.position = c(0.85,0.6),axis.text=element_text(size=8),axis.title=element_text(size=8),legend.title=element_text(size=8),legend.text=element_text(size=8))
+
+p2
+
+```
+
+
+##### Create  Dynamic network (year 2009-2018)
+```{r, message=FALSE, warning = FALSE}
+require(network)
+require(networkDynamic)
+require(tsna)
+require(statnet)
+require(ndtv)
+
+# Dynamic network_function: Dyn
+
+Dyn=function(M){
+  years <- sort(unique(M$TIME))
+  year <- vector("list", length(years))
+  network <- vector("list", length(years))
+  
+  for(i in seq_along(years)){
+    year[[i]] <- subset(M, Time==years[i])
+    network[[i]] <- network(year[[i]],vertex.attr=node,directed = T, matrix.type = "edgelist")
+  }
+  
+  Net_Dyn <- networkDynamic(network.list =network,vertex.pid="vertex.names",start = 2009,end = 2018)
+  set.vertex.attribute(Net_Dyn,"country", node$country_name)
+  set.vertex.attribute(Net_Dyn,"continent",node$continent)
+  set.vertex.attribute(Net_Dyn,"identity", node$identity)
+  
+  return(Net_Dyn)
+}
+
+# trade value
+trade_v=function(M){
+  years <- sort(unique(M$TIME))
+  year <- vector("list", length(years))
+  value <- c(rep(0,10))
+  
+  for(i in seq_along(years)){
+    year[[i]] <- subset(M, Time==years[i])
+    value[i] <- sum(year[[i]]$Value)/10^10
+
+  }
+  return(value)
+}
+
+coal_dyn <- Dyn(coal_all)
+coal_value <- trade_v(coal_all)
+
+```
+
+##### Density and value of trade (2009-2018)
+```{r  ,include=FALSE}
+
+oil_dyn <-  Dyn(oil_all)
+oil_value<- trade_v(oil_all)
+
+
+oil_den <- tSnaStats(oil_dyn, "gden")
+
+df2 <- data.frame(c(2009:2018),oil_den[1:10,],oil_value)
+colnames(df2 ) <- c("year","density","trade value")
+# petroleum density & trade value plot
+p3 <- ggplot(df2,aes(x=year))+geom_line(aes(y=density,color="density"))
+p3 <- p3 + geom_line(aes(y = oil_value/1000, colour = "trade value"))
+p3 <- p3 + scale_y_continuous(name="density",sec.axis = sec_axis((~.*1000),name =expression(paste("trade values ", "[",10^10," ","US $","]")) ))+ theme_classic()+ theme(legend.position = "top",legend.title = element_blank(),axis.text = element_text(size=7),axis.title=element_text(size=8),legend.text = element_text(size=6),legend.box.spacing = unit(0.01, "cm"))
+
+
+```
+
+```{r  ,acho=FALSE, result="hide",out.width="50%" ,fig.height=4, fig.width=5, fig.show='hold'}
+
+coal_den <- tSnaStats(coal_dyn, "gden")
+
+
+
+df1 <- data.frame(c(2009:2018),coal_den[1:10,],coal_value)
+colnames(df1) <- c("year","density","trade value")
+
+p <- ggplot(df1,aes(x=year))+geom_line(aes(y=density,color="density"))
+p <- p + geom_line(aes(y = coal_value/100, colour = "trade value"))
+p <- p + scale_y_continuous(name="density",sec.axis = sec_axis((~.*100),name =expression(paste("trade values ", "[",10^10," ","US $","]")) ))+ theme_classic()+ theme(legend.position = "top",legend.title = element_blank(),axis.text = element_text(size=7),axis.title=element_text(size=8),legend.text = element_text(size=6),legend.box.spacing = unit(0.01, "cm"))
+p
+p3
+```
+
+##### Efficiency and degree
+```{r  ,acho=FALSE, result="hide",out.width="50%" ,fig.height=4, fig.width=5, fig.show='hold'}
+data_complete1 <- degree_coal[complete.cases(efficiency), ]
+
+ggplot(data_complete1, aes(x=outdegree, y=efficiency))+geom_point(size=0.6) +stat_smooth(method = "lm", colour = "orange")+geom_text(label=data_complete1$country,cex=2,vjust = 0, nudge_y = 0.005)+labs(title="Coal",x="Out degree", y = "efficiency")+theme_classic()+theme(plot.title = element_text(size=10,hjust = 0.5),axis.text=element_text(size=9),axis.title=element_text(size=9),legend.title=element_text(size=8))
+
+ggplot(data_complete1, aes(x=indegree, y=efficiency)) +geom_point(size=0.6)+stat_smooth(method = "lm", colour = "orange") + geom_text(label=data_complete1$country,cex=2,vjust = 0, nudge_y = 0.005)+labs(title="Coal",x="In degree", y = "efficiency")+theme_classic()+theme(plot.title = element_text(size=10,hjust = 0.5),axis.text=element_text(size=9),axis.title=element_text(size=9),legend.title=element_text(size=8))
+
+p7
+p8
+```
+
+
+##### Dynamic network (Coal)
+```{r  ,acho=FALSE,message=FALSE, result="hide",out.width="50%" ,fig.height=4, fig.width=5, fig.show='hold'}
+render.d3movie(coal_dyn,displaylabels=FALSE,output.mode="htmlWidget",vertex.tooltip=function(slice){
+  paste(
+    "<b>Country:</b>",(slice %v% "country"),
+    "<br>","<b>Region:</b>",(slice %v% "continent")
+  )
+})
+
+```
+
